@@ -12,12 +12,14 @@ import time
 try:
     import mediapipe as mp
     MEDIAPIPE_AVAILABLE = True
-    # Initialize MediaPipe
+    # Initialize MediaPipe (use CPU mode to avoid GL context errors in headless environments)
     mp_pose = mp.solutions.pose
     mp_drawing = mp.solutions.drawing_utils
     pose = mp_pose.Pose(
         min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
+        min_tracking_confidence=0.5,
+        static_image_mode=False,
+        model_complexity=1  # Use simpler model to reduce GPU dependency
     )
 except ImportError as e:
     MEDIAPIPE_AVAILABLE = False
@@ -541,7 +543,7 @@ with col1:
         processed_frame, distance, height, guidance, color, person_detected, used_focal = process_frame(image, focal_length)
         
         # Update display
-        image_placeholder.image(processed_frame, use_container_width=True, channels="RGB")
+        image_placeholder.image(processed_frame, width='stretch', channels="RGB")
         info_placeholder.caption(f"Using focal length: {used_focal:.0f} px | Live Mode: Processing...")
         
         # Auto-refresh for live mode (every 0.5 seconds)
@@ -583,7 +585,7 @@ with col1:
         
         # Display processed image (only if not in live mode, live mode uses placeholder)
         if not st.session_state.live_mode:
-            st.image(processed_frame, use_container_width=True, channels="RGB")
+            st.image(processed_frame, width='stretch', channels="RGB")
             st.caption(f"Using focal length: {used_focal:.0f} px")
 
 with col2:
