@@ -7,6 +7,15 @@ from collections import deque
 import matplotlib.pyplot as plt
 import pandas as pd
 import time
+import hashlib
+import os
+import sys
+import warnings
+
+# Suppress MediaPipe GL context warnings (harmless in headless environments)
+# These errors occur because MediaPipe tries GPU first, then falls back to CPU
+os.environ['GLOG_minloglevel'] = '2'  # Suppress glog warnings (MediaPipe uses glog)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow warnings
 
 # Try to import MediaPipe with error handling
 try:
