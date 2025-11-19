@@ -1,18 +1,25 @@
 import streamlit as st
 import cv2
 import numpy as np
-import mediapipe as mp
 from PIL import Image
 import math
 from collections import deque
 
-# Initialize MediaPipe
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-pose = mp_pose.Pose(
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+# Try to import MediaPipe with error handling
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+    # Initialize MediaPipe
+    mp_pose = mp.solutions.pose
+    mp_drawing = mp.solutions.drawing_utils
+    pose = mp_pose.Pose(
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+except ImportError as e:
+    MEDIAPIPE_AVAILABLE = False
+    st.error(f"⚠️ MediaPipe could not be imported: {e}. Please ensure Python 3.11 or 3.12 is being used.")
+    st.stop()
 
 # Initialize session state for calibration and measurements
 if 'calibrated_focal_length' not in st.session_state:
