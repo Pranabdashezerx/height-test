@@ -24,11 +24,12 @@ try:
     # Initialize MediaPipe (use CPU mode to avoid GL context errors in headless environments)
     mp_pose = mp.solutions.pose
     mp_drawing = mp.solutions.drawing_utils
+    
     pose = mp_pose.Pose(
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
         static_image_mode=False,
-        model_complexity=1  # Use simpler model to reduce GPU dependency
+        model_complexity=1  # Use simpler model (reduces GPU dependency and improves CPU performance)
     )
 except ImportError as e:
     MEDIAPIPE_AVAILABLE = False
@@ -54,6 +55,12 @@ if 'live_mode' not in st.session_state:
     st.session_state.live_mode = False
 if 'last_frame_time' not in st.session_state:
     st.session_state.last_frame_time = 0
+if 'last_camera_hash' not in st.session_state:
+    st.session_state.last_camera_hash = None
+if 'rerun_count' not in st.session_state:
+    st.session_state.rerun_count = 0
+if 'max_reruns' not in st.session_state:
+    st.session_state.max_reruns = 1000  # Safety limit
 
 # Constants for distance estimation
 AVERAGE_SHOULDER_WIDTH = 0.41  # Average shoulder width in meters
@@ -241,13 +248,20 @@ def process_frame(image, focal_length=None):
         calibrated_height = apply_calibration(height) if height else None
         
         # Store measurement if valid (store raw height for calibration)
+        # Only store if not in live mode or if it's been a while (to prevent memory buildup)
         if height and distance:
-            st.session_state.measurement_history.append({
-                'height': height,  # Store raw height
-                'calibrated_height': calibrated_height,
-                'distance': distance,
-                'timestamp': len(st.session_state.measurement_history)
-            })
+            should_store = True
+            if st.session_state.live_mode:
+                # In live mode, only store every 3rd measurement to reduce memory
+                should_store = (len(st.session_state.measurement_history) % 3 == 0) or len(st.session_state.measurement_history) < 3
+            
+            if should_store:
+                st.session_state.measurement_history.append({
+                    'height': height,  # Store raw height
+                    'calibrated_height': calibrated_height,
+                    'distance': distance,
+                    'timestamp': len(st.session_state.measurement_history)
+                })
         
         # Draw detailed annotations
         annotated_frame = draw_detailed_annotations(
@@ -529,10 +543,17 @@ with col1:
     # Live mode toggle
     live_col1, live_col2 = st.columns([3, 1])
     with live_col1:
-        st.session_state.live_mode = st.checkbox("🟢 Live Mode (Real-time Feedback)", value=st.session_state.live_mode, key="live_toggle")
+        live_mode_toggle = st.checkbox("🟢 Live Mode (Real-time Feedback)", value=st.session_state.live_mode, key="live_toggle")
+        if live_mode_toggle != st.session_state.live_mode:
+            # Reset counters when toggling
+            st.session_state.rerun_count = 0
+            st.session_state.last_frame_time = 0
+            st.session_state.last_camera_hash = None
+        st.session_state.live_mode = live_mode_toggle
     with live_col2:
         if st.session_state.live_mode:
             st.success("ON")
+            st.caption(f"Frames: {st.session_state.rerun_count}")
         else:
             st.info("OFF")
     
@@ -545,19 +566,59 @@ with col1:
     
     # Process in live mode
     if st.session_state.live_mode and camera_image:
-        # Process continuously
-        image = Image.open(camera_image)
-        focal_length = st.session_state.calibrated_focal_length if st.session_state.calibrated_focal_length else 700
+        # Safety check: prevent infinite reruns
+        st.session_state.rerun_count += 1
+        if st.session_state.rerun_count > st.session_state.max_reruns:
+            st.session_state.live_mode = False
+            st.error("⚠️ Live mode stopped to prevent memory issues. Please refresh the page.")
+            st.stop()
         
-        processed_frame, distance, height, guidance, color, person_detected, used_focal = process_frame(image, focal_length)
+        # Rate limiting: only process if enough time has passed (1 second)
+        current_time = time.time()
+        time_since_last = current_time - st.session_state.last_frame_time
         
-        # Update display
-        image_placeholder.image(processed_frame, width='stretch', channels="RGB")
-        info_placeholder.caption(f"Using focal length: {used_focal:.0f} px | Live Mode: Processing...")
+        # Check if camera image has changed (simple hash check)
+        camera_bytes = camera_image.getvalue() if hasattr(camera_image, 'getvalue') else bytes(camera_image)
+        camera_hash = hashlib.md5(camera_bytes).hexdigest()
         
-        # Auto-refresh for live mode (every 0.5 seconds)
-        time.sleep(0.5)
-        st.rerun()
+        # Only process if image changed or enough time passed
+        if camera_hash != st.session_state.last_camera_hash or time_since_last >= 1.0:
+            try:
+                # Process continuously
+                image = Image.open(camera_image)
+                focal_length = st.session_state.calibrated_focal_length if st.session_state.calibrated_focal_length else 700
+                
+                processed_frame, distance, height, guidance, color, person_detected, used_focal = process_frame(image, focal_length)
+                
+                # Update display
+                image_placeholder.image(processed_frame, width='stretch', channels="RGB")
+                info_placeholder.caption(f"Using focal length: {used_focal:.0f} px | Live Mode: ON | Frames: {st.session_state.rerun_count}")
+                
+                # Update tracking
+                st.session_state.last_frame_time = current_time
+                st.session_state.last_camera_hash = camera_hash
+                
+                # Limit measurement storage - only store every 3rd frame to reduce memory
+                if st.session_state.rerun_count % 3 == 0:
+                    # Clear old measurements periodically
+                    if len(st.session_state.measurement_history) > 8:
+                        # Keep only last 5
+                        recent = list(st.session_state.measurement_history)[-5:]
+                        st.session_state.measurement_history.clear()
+                        st.session_state.measurement_history.extend(recent)
+                
+                # Auto-refresh for live mode (every 1 second, not 0.5)
+                time.sleep(1.0)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error in live mode: {str(e)}")
+                st.session_state.live_mode = False
+                st.stop()
+        else:
+            # Image hasn't changed, wait a bit before checking again
+            time.sleep(0.5)
+            st.rerun()
     
     if camera_image and not st.session_state.live_mode:
         # Process the image
@@ -780,4 +841,3 @@ with st.expander("ℹ️ Tips for Maximum Accuracy"):
     - Without calibration: ±3-5 cm accuracy
     - Multiple measurements improve reliability
     """)
-
